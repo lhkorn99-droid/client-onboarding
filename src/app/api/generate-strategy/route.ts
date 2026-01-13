@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
 
 // Lazy initialization to avoid build-time errors
 let anthropic: Anthropic | null = null;
-let openai: OpenAI | null = null;
 
 function getAnthropic() {
   if (!anthropic) {
@@ -13,15 +11,6 @@ function getAnthropic() {
     });
   }
   return anthropic;
-}
-
-function getOpenAI() {
-  if (!openai) {
-    openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-  }
-  return openai;
 }
 
 function convertToFetchableUrl(url: string): string {
@@ -43,219 +32,11 @@ function convertToFetchableUrl(url: string): string {
     return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
   }
 
-  // Fathom - keep full URL for fetching share page
-  if (url.includes("fathom.video")) {
-    return `FATHOM_URL:${url}`;
-  }
-
   return url;
-}
-
-async function fetchFathomTranscript(shareId: string): Promise<string> {
-  const apiKey = process.env.FATHOM_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("Fathom API key not configured. Add FATHOM_API_KEY to your environment variables.");
-  }
-
-  // Try multiple endpoint formats since share ID might differ from call ID
-  const endpoints = [
-    `https://api.fathom.ai/external/v1/share/${shareId}/transcript`,
-    `https://api.fathom.ai/external/v1/calls/${shareId}/transcript`,
-    `https://api.fathom.ai/external/v1/recordings/${shareId}/transcript`,
-    `https://api.fathom.ai/external/v1/calls/${shareId}`,
-  ];
-
-  for (const endpoint of endpoints) {
-    try {
-      console.log(`Trying Fathom endpoint: ${endpoint}`);
-      const response = await fetch(endpoint, {
-        headers: {
-          "X-Api-Key": apiKey,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log("Fathom API success:", JSON.stringify(data).slice(0, 200));
-
-        // If this is a call object with transcript field
-        if (data.transcript) {
-          return formatFathomTranscript(data.transcript);
-        }
-        return formatFathomTranscript(data);
-      }
-      console.log(`Endpoint ${endpoint} returned ${response.status}`);
-    } catch (e) {
-      console.log(`Endpoint ${endpoint} failed:`, e);
-    }
-  }
-
-  // If none worked, try to list recent calls and find matching one
-  try {
-    const listResponse = await fetch(`https://api.fathom.ai/external/v1/calls?include_transcript=true&limit=20`, {
-      headers: {
-        "X-Api-Key": apiKey,
-      },
-    });
-
-    if (listResponse.ok) {
-      const calls = await listResponse.json();
-      console.log("Got calls list, searching for match...");
-
-      // Look through recent calls for one that might match
-      if (Array.isArray(calls)) {
-        for (const call of calls) {
-          if (call.share_url?.includes(shareId) || call.id === shareId) {
-            if (call.transcript) {
-              return formatFathomTranscript(call.transcript);
-            }
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.log("List calls failed:", e);
-  }
-
-  throw new Error(`Could not fetch transcript for share ID: ${shareId}. The share link ID may not be accessible via API. Try using the call ID from your Fathom dashboard or paste the transcript directly.`);
-}
-
-function findTranscriptInObject(obj: unknown, depth = 0): string | null {
-  if (depth > 10) return null; // Prevent infinite recursion
-
-  if (typeof obj === 'string' && obj.length > 500 && obj.includes(':')) {
-    // Might be a transcript string
-    return obj;
-  }
-
-  if (Array.isArray(obj)) {
-    // Check if this looks like a transcript array
-    if (obj.length > 0 && obj[0] && typeof obj[0] === 'object' && ('text' in obj[0] || 'speaker' in obj[0])) {
-      return formatFathomTranscript(obj);
-    }
-    for (const item of obj) {
-      const result = findTranscriptInObject(item, depth + 1);
-      if (result) return result;
-    }
-  }
-
-  if (obj && typeof obj === 'object') {
-    // Check for transcript key
-    if ('transcript' in obj) {
-      const transcript = (obj as Record<string, unknown>).transcript;
-      if (typeof transcript === 'string' && transcript.length > 100) {
-        return transcript;
-      }
-      if (Array.isArray(transcript)) {
-        return formatFathomTranscript(transcript);
-      }
-    }
-    // Recurse into object properties
-    for (const value of Object.values(obj)) {
-      const result = findTranscriptInObject(value, depth + 1);
-      if (result) return result;
-    }
-  }
-
-  return null;
-}
-
-function formatFathomTranscript(data: unknown): string {
-  // Handle different response formats
-  if (typeof data === 'string') {
-    return data;
-  }
-
-  if (Array.isArray(data)) {
-    // Array of transcript entries with speaker, text, timestamp
-    return data.map((entry: { speaker?: { display_name?: string }; text?: string; timestamp?: string }) => {
-      const speaker = entry.speaker?.display_name || 'Speaker';
-      const text = entry.text || '';
-      const timestamp = entry.timestamp || '';
-      return `[${timestamp}] ${speaker}: ${text}`;
-    }).join('\n');
-  }
-
-  if (data && typeof data === 'object' && 'transcript' in data) {
-    const transcript = (data as { transcript: unknown }).transcript;
-    if (typeof transcript === 'string') {
-      return transcript;
-    }
-    if (Array.isArray(transcript)) {
-      return formatFathomTranscript(transcript);
-    }
-  }
-
-  // Fallback: stringify the response
-  return JSON.stringify(data, null, 2);
 }
 
 async function fetchLinkContent(url: string): Promise<string> {
   const fetchUrl = convertToFetchableUrl(url);
-
-  // Special handling for Fathom links
-  if (fetchUrl.startsWith("FATHOM_URL:")) {
-    const fathomUrl = fetchUrl.replace("FATHOM_URL:", "");
-    try {
-      // First try to fetch the share page and extract data
-      console.log("Fetching Fathom share page:", fathomUrl);
-      const pageResponse = await fetch(fathomUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-          "Accept": "text/html,application/xhtml+xml",
-        },
-      });
-
-      if (pageResponse.ok) {
-        const html = await pageResponse.text();
-
-        // Try to find call ID in the page
-        const callIdMatch = html.match(/call[_-]?id["'\s:=]+["']?([a-f0-9-]{36})["']?/i);
-        if (callIdMatch) {
-          console.log("Found call ID in page:", callIdMatch[1]);
-          return await fetchFathomTranscript(callIdMatch[1]);
-        }
-
-        // Try to find embedded transcript data
-        const transcriptMatch = html.match(/transcript["'\s:=]+(\[[\s\S]*?\])/);
-        if (transcriptMatch) {
-          try {
-            const transcript = JSON.parse(transcriptMatch[1]);
-            return formatFathomTranscript(transcript);
-          } catch {
-            console.log("Could not parse embedded transcript");
-          }
-        }
-
-        // Try to extract any JSON data that might contain transcript
-        const jsonDataMatch = html.match(/<script[^>]*>[\s\S]*?window\.__NEXT_DATA__\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
-        if (jsonDataMatch) {
-          try {
-            const nextData = JSON.parse(jsonDataMatch[1]);
-            console.log("Found Next.js data, checking for transcript...");
-            const transcript = findTranscriptInObject(nextData);
-            if (transcript) {
-              return transcript;
-            }
-          } catch {
-            console.log("Could not parse Next.js data");
-          }
-        }
-      }
-
-      // If page scraping didn't work, try API with share ID
-      const shareIdMatch = fathomUrl.match(/fathom\.video\/(?:share|call|recording)\/([a-zA-Z0-9_-]+)/);
-      if (shareIdMatch) {
-        return await fetchFathomTranscript(shareIdMatch[1]);
-      }
-
-      throw new Error("Could not extract transcript from Fathom share page");
-    } catch (error) {
-      console.error("Fathom error:", error);
-      return `[Could not fetch Fathom transcript. Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please copy the transcript from Fathom and paste it directly.]`;
-    }
-  }
 
   const response = await fetch(fetchUrl, {
     headers: {
@@ -266,7 +47,6 @@ async function fetchLinkContent(url: string): Promise<string> {
   });
 
   if (!response.ok) {
-    // Provide helpful error messages
     if (url.includes("google.com")) {
       throw new Error(`Google link not accessible. Make sure sharing is set to "Anyone with the link can view"`);
     }
@@ -314,7 +94,6 @@ export async function POST(request: NextRequest) {
     const socialProfile = formData.get("socialProfile") as string;
     const meetingRecordingType = formData.get("meetingRecordingType") as string | null;
     const meetingRecordingContent = formData.get("meetingRecordingContent") as string | null;
-    const meetingRecordingFile = formData.get("meetingRecordingFile") as File | null;
     const auditDeck = formData.get("auditDeck") as File | null;
     const auditLink = formData.get("auditLink") as string | null;
 
@@ -330,39 +109,9 @@ export async function POST(request: NextRequest) {
       socialContent: null,
     };
 
-    // Process meeting recording
+    // Process meeting transcript
     if (meetingRecordingType === "transcript" && meetingRecordingContent) {
       collectedData.meetingTranscript = meetingRecordingContent;
-    } else if (meetingRecordingType === "link" && meetingRecordingContent) {
-      // Fetch content from the link
-      try {
-        const content = await fetchLinkContent(meetingRecordingContent);
-        collectedData.meetingTranscript = content;
-      } catch (error) {
-        console.error("Error fetching transcript link:", error);
-        collectedData.meetingTranscript = `[Could not fetch content from: ${meetingRecordingContent}]`;
-      }
-    } else if (meetingRecordingType === "file" && meetingRecordingFile) {
-      // Transcribe audio/video using Whisper
-      try {
-        const arrayBuffer = await meetingRecordingFile.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-
-        // Create a File object for OpenAI
-        const file = new File([buffer], meetingRecordingFile.name, {
-          type: meetingRecordingFile.type,
-        });
-
-        const transcription = await getOpenAI().audio.transcriptions.create({
-          file: file,
-          model: "whisper-1",
-        });
-
-        collectedData.meetingTranscript = transcription.text;
-      } catch (error) {
-        console.error("Error transcribing audio:", error);
-        collectedData.meetingTranscript = "[Error transcribing audio file]";
-      }
     }
 
     // Process audit deck - first try link, then fall back to file
@@ -372,7 +121,7 @@ export async function POST(request: NextRequest) {
         collectedData.auditDeckContent = content;
       } catch (error) {
         console.error("Error fetching audit link:", error);
-        collectedData.auditDeckContent = `[Could not fetch content from: ${auditLink}]`;
+        collectedData.auditDeckContent = `[Could not fetch content from: ${auditLink}. Make sure sharing is set to "Anyone with the link can view"]`;
       }
     } else if (auditDeck) {
       try {
@@ -380,7 +129,6 @@ export async function POST(request: NextRequest) {
         const buffer = Buffer.from(arrayBuffer);
 
         if (auditDeck.name.endsWith(".pdf")) {
-          // Dynamic import for pdf-parse
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           const pdfParse = require("pdf-parse");
           const pdfData = await pdfParse(buffer);
@@ -394,7 +142,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fetch website content (simple fetch)
+    // Fetch website content
     if (websiteUrl) {
       try {
         const response = await fetch(websiteUrl, {
@@ -403,14 +151,13 @@ export async function POST(request: NextRequest) {
           },
         });
         const html = await response.text();
-        // Extract text content (basic - strip HTML tags)
         const textContent = html
           .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
           .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
           .replace(/<[^>]+>/g, " ")
           .replace(/\s+/g, " ")
           .trim()
-          .slice(0, 10000); // Limit content
+          .slice(0, 10000);
         collectedData.websiteContent = textContent;
       } catch (error) {
         console.error("Error fetching website:", error);
@@ -418,7 +165,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // For social profiles, we'd need specific API integrations
+    // For social profiles, note the URL
     if (socialProfile) {
       collectedData.socialContent = `[Social profile URL provided: ${socialProfile}]`;
     }
