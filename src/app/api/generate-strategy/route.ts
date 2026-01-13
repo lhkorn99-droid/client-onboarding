@@ -117,7 +117,10 @@ export async function POST(request: NextRequest) {
     // Process audit deck - first try link, then fall back to file
     if (auditLink) {
       try {
+        console.log("Fetching audit link:", auditLink);
         const content = await fetchLinkContent(auditLink);
+        console.log("Audit content fetched, length:", content.length, "chars");
+        console.log("Audit content preview:", content.slice(0, 500));
         collectedData.auditDeckContent = content;
       } catch (error) {
         console.error("Error fetching audit link:", error);
