@@ -43,15 +43,9 @@ function convertToFetchableUrl(url: string): string {
     return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
   }
 
-  // Fathom - extract the call ID for API fetch
+  // Fathom - keep full URL for fetching share page
   if (url.includes("fathom.video")) {
-    // Extract call ID from various Fathom URL formats
-    // e.g., https://fathom.video/share/abc123 or https://fathom.video/call/abc123
-    const fathomMatch = url.match(/fathom\.video\/(?:share|call|recording)\/([a-zA-Z0-9_-]+)/);
-    if (fathomMatch) {
-      return `FATHOM:${fathomMatch[1]}`;
-    }
-    return `FATHOM_INVALID:${url}`;
+    return `FATHOM_URL:${url}`;
   }
 
   return url;
@@ -127,6 +121,46 @@ async function fetchFathomTranscript(shareId: string): Promise<string> {
   throw new Error(`Could not fetch transcript for share ID: ${shareId}. The share link ID may not be accessible via API. Try using the call ID from your Fathom dashboard or paste the transcript directly.`);
 }
 
+function findTranscriptInObject(obj: unknown, depth = 0): string | null {
+  if (depth > 10) return null; // Prevent infinite recursion
+
+  if (typeof obj === 'string' && obj.length > 500 && obj.includes(':')) {
+    // Might be a transcript string
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    // Check if this looks like a transcript array
+    if (obj.length > 0 && obj[0] && typeof obj[0] === 'object' && ('text' in obj[0] || 'speaker' in obj[0])) {
+      return formatFathomTranscript(obj);
+    }
+    for (const item of obj) {
+      const result = findTranscriptInObject(item, depth + 1);
+      if (result) return result;
+    }
+  }
+
+  if (obj && typeof obj === 'object') {
+    // Check for transcript key
+    if ('transcript' in obj) {
+      const transcript = (obj as Record<string, unknown>).transcript;
+      if (typeof transcript === 'string' && transcript.length > 100) {
+        return transcript;
+      }
+      if (Array.isArray(transcript)) {
+        return formatFathomTranscript(transcript);
+      }
+    }
+    // Recurse into object properties
+    for (const value of Object.values(obj)) {
+      const result = findTranscriptInObject(value, depth + 1);
+      if (result) return result;
+    }
+  }
+
+  return null;
+}
+
 function formatFathomTranscript(data: unknown): string {
   // Handle different response formats
   if (typeof data === 'string') {
@@ -161,18 +195,66 @@ async function fetchLinkContent(url: string): Promise<string> {
   const fetchUrl = convertToFetchableUrl(url);
 
   // Special handling for Fathom links
-  if (fetchUrl.startsWith("FATHOM:")) {
-    const callId = fetchUrl.replace("FATHOM:", "");
+  if (fetchUrl.startsWith("FATHOM_URL:")) {
+    const fathomUrl = fetchUrl.replace("FATHOM_URL:", "");
     try {
-      return await fetchFathomTranscript(callId);
-    } catch (error) {
-      console.error("Fathom API error:", error);
-      return `[Could not fetch Fathom transcript. Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please paste the transcript directly.]`;
-    }
-  }
+      // First try to fetch the share page and extract data
+      console.log("Fetching Fathom share page:", fathomUrl);
+      const pageResponse = await fetch(fathomUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          "Accept": "text/html,application/xhtml+xml",
+        },
+      });
 
-  if (fetchUrl.startsWith("FATHOM_INVALID:")) {
-    return `[Invalid Fathom URL format. Please use a link like fathom.video/share/xxx or paste the transcript directly.]`;
+      if (pageResponse.ok) {
+        const html = await pageResponse.text();
+
+        // Try to find call ID in the page
+        const callIdMatch = html.match(/call[_-]?id["'\s:=]+["']?([a-f0-9-]{36})["']?/i);
+        if (callIdMatch) {
+          console.log("Found call ID in page:", callIdMatch[1]);
+          return await fetchFathomTranscript(callIdMatch[1]);
+        }
+
+        // Try to find embedded transcript data
+        const transcriptMatch = html.match(/transcript["'\s:=]+(\[[\s\S]*?\])/);
+        if (transcriptMatch) {
+          try {
+            const transcript = JSON.parse(transcriptMatch[1]);
+            return formatFathomTranscript(transcript);
+          } catch {
+            console.log("Could not parse embedded transcript");
+          }
+        }
+
+        // Try to extract any JSON data that might contain transcript
+        const jsonDataMatch = html.match(/<script[^>]*>[\s\S]*?window\.__NEXT_DATA__\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
+        if (jsonDataMatch) {
+          try {
+            const nextData = JSON.parse(jsonDataMatch[1]);
+            console.log("Found Next.js data, checking for transcript...");
+            const transcript = findTranscriptInObject(nextData);
+            if (transcript) {
+              return transcript;
+            }
+          } catch {
+            console.log("Could not parse Next.js data");
+          }
+        }
+      }
+
+      // If page scraping didn't work, try API with share ID
+      const shareIdMatch = fathomUrl.match(/fathom\.video\/(?:share|call|recording)\/([a-zA-Z0-9_-]+)/);
+      if (shareIdMatch) {
+        return await fetchFathomTranscript(shareIdMatch[1]);
+      }
+
+      throw new Error("Could not extract transcript from Fathom share page");
+    } catch (error) {
+      console.error("Fathom error:", error);
+      return `[Could not fetch Fathom transcript. Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please copy the transcript from Fathom and paste it directly.]`;
+    }
   }
 
   const response = await fetch(fetchUrl, {
