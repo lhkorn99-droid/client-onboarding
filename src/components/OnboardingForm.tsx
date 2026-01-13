@@ -101,10 +101,13 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
         <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">
           Audit Deck
         </h2>
+        <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+          Share a public Google Slides link or upload a PDF
+        </p>
         <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              Google Slides / Docs Link
+              Google Slides Link
             </label>
             <input
               type="url"
@@ -114,13 +117,22 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
               placeholder="https://docs.google.com/presentation/d/..."
             />
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Set sharing to &quot;Anyone with the link can view&quot;
+              Click Share → set to &quot;Anyone with the link&quot; → copy link
             </p>
+          </div>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200 dark:border-slate-700"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white dark:bg-slate-800 text-slate-500">or</span>
+            </div>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              Or Upload PDF
+              Upload PDF
             </label>
             <FileUpload
               accept=".pdf"
