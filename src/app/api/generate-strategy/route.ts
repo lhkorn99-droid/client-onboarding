@@ -43,13 +43,82 @@ function convertToFetchableUrl(url: string): string {
     return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
   }
 
-  // Fathom - check if it's a share link
+  // Fathom - extract the call ID for API fetch
   if (url.includes("fathom.video")) {
-    // Fathom doesn't allow direct fetching - return special marker
-    return `FATHOM:${url}`;
+    // Extract call ID from various Fathom URL formats
+    // e.g., https://fathom.video/share/abc123 or https://fathom.video/call/abc123
+    const fathomMatch = url.match(/fathom\.video\/(?:share|call|recording)\/([a-zA-Z0-9_-]+)/);
+    if (fathomMatch) {
+      return `FATHOM:${fathomMatch[1]}`;
+    }
+    return `FATHOM_INVALID:${url}`;
   }
 
   return url;
+}
+
+async function fetchFathomTranscript(callId: string): Promise<string> {
+  const apiKey = process.env.FATHOM_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("Fathom API key not configured");
+  }
+
+  // First, try to get the recording/call details
+  const response = await fetch(`https://api.fathom.ai/external/v1/calls/${callId}/transcript`, {
+    headers: {
+      "X-Api-Key": apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    // Try alternate endpoint format
+    const altResponse = await fetch(`https://api.fathom.ai/external/v1/recordings/${callId}/transcript`, {
+      headers: {
+        "X-Api-Key": apiKey,
+      },
+    });
+
+    if (!altResponse.ok) {
+      throw new Error(`Fathom API error: ${altResponse.status}`);
+    }
+
+    const data = await altResponse.json();
+    return formatFathomTranscript(data);
+  }
+
+  const data = await response.json();
+  return formatFathomTranscript(data);
+}
+
+function formatFathomTranscript(data: unknown): string {
+  // Handle different response formats
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  if (Array.isArray(data)) {
+    // Array of transcript entries with speaker, text, timestamp
+    return data.map((entry: { speaker?: { display_name?: string }; text?: string; timestamp?: string }) => {
+      const speaker = entry.speaker?.display_name || 'Speaker';
+      const text = entry.text || '';
+      const timestamp = entry.timestamp || '';
+      return `[${timestamp}] ${speaker}: ${text}`;
+    }).join('\n');
+  }
+
+  if (data && typeof data === 'object' && 'transcript' in data) {
+    const transcript = (data as { transcript: unknown }).transcript;
+    if (typeof transcript === 'string') {
+      return transcript;
+    }
+    if (Array.isArray(transcript)) {
+      return formatFathomTranscript(transcript);
+    }
+  }
+
+  // Fallback: stringify the response
+  return JSON.stringify(data, null, 2);
 }
 
 async function fetchLinkContent(url: string): Promise<string> {
@@ -57,7 +126,17 @@ async function fetchLinkContent(url: string): Promise<string> {
 
   // Special handling for Fathom links
   if (fetchUrl.startsWith("FATHOM:")) {
-    return `[Fathom recording link provided: ${url}. Note: Fathom links require manual transcript export. Please go to your Fathom recording, click "Copy Transcript" and paste it directly instead.]`;
+    const callId = fetchUrl.replace("FATHOM:", "");
+    try {
+      return await fetchFathomTranscript(callId);
+    } catch (error) {
+      console.error("Fathom API error:", error);
+      return `[Could not fetch Fathom transcript. Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please paste the transcript directly.]`;
+    }
+  }
+
+  if (fetchUrl.startsWith("FATHOM_INVALID:")) {
+    return `[Invalid Fathom URL format. Please use a link like fathom.video/share/xxx or paste the transcript directly.]`;
   }
 
   const response = await fetch(fetchUrl, {
