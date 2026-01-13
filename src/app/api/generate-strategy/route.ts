@@ -57,38 +57,74 @@ function convertToFetchableUrl(url: string): string {
   return url;
 }
 
-async function fetchFathomTranscript(callId: string): Promise<string> {
+async function fetchFathomTranscript(shareId: string): Promise<string> {
   const apiKey = process.env.FATHOM_API_KEY;
 
   if (!apiKey) {
-    throw new Error("Fathom API key not configured");
+    throw new Error("Fathom API key not configured. Add FATHOM_API_KEY to your environment variables.");
   }
 
-  // First, try to get the recording/call details
-  const response = await fetch(`https://api.fathom.ai/external/v1/calls/${callId}/transcript`, {
-    headers: {
-      "X-Api-Key": apiKey,
-    },
-  });
+  // Try multiple endpoint formats since share ID might differ from call ID
+  const endpoints = [
+    `https://api.fathom.ai/external/v1/share/${shareId}/transcript`,
+    `https://api.fathom.ai/external/v1/calls/${shareId}/transcript`,
+    `https://api.fathom.ai/external/v1/recordings/${shareId}/transcript`,
+    `https://api.fathom.ai/external/v1/calls/${shareId}`,
+  ];
 
-  if (!response.ok) {
-    // Try alternate endpoint format
-    const altResponse = await fetch(`https://api.fathom.ai/external/v1/recordings/${callId}/transcript`, {
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`Trying Fathom endpoint: ${endpoint}`);
+      const response = await fetch(endpoint, {
+        headers: {
+          "X-Api-Key": apiKey,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("Fathom API success:", JSON.stringify(data).slice(0, 200));
+
+        // If this is a call object with transcript field
+        if (data.transcript) {
+          return formatFathomTranscript(data.transcript);
+        }
+        return formatFathomTranscript(data);
+      }
+      console.log(`Endpoint ${endpoint} returned ${response.status}`);
+    } catch (e) {
+      console.log(`Endpoint ${endpoint} failed:`, e);
+    }
+  }
+
+  // If none worked, try to list recent calls and find matching one
+  try {
+    const listResponse = await fetch(`https://api.fathom.ai/external/v1/calls?include_transcript=true&limit=20`, {
       headers: {
         "X-Api-Key": apiKey,
       },
     });
 
-    if (!altResponse.ok) {
-      throw new Error(`Fathom API error: ${altResponse.status}`);
-    }
+    if (listResponse.ok) {
+      const calls = await listResponse.json();
+      console.log("Got calls list, searching for match...");
 
-    const data = await altResponse.json();
-    return formatFathomTranscript(data);
+      // Look through recent calls for one that might match
+      if (Array.isArray(calls)) {
+        for (const call of calls) {
+          if (call.share_url?.includes(shareId) || call.id === shareId) {
+            if (call.transcript) {
+              return formatFathomTranscript(call.transcript);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log("List calls failed:", e);
   }
 
-  const data = await response.json();
-  return formatFathomTranscript(data);
+  throw new Error(`Could not fetch transcript for share ID: ${shareId}. The share link ID may not be accessible via API. Try using the call ID from your Fathom dashboard or paste the transcript directly.`);
 }
 
 function formatFathomTranscript(data: unknown): string {
