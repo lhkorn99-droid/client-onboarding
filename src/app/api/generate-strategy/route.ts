@@ -24,27 +24,74 @@ function getOpenAI() {
   return openai;
 }
 
+function convertToFetchableUrl(url: string): string {
+  // Google Docs - convert to export URL
+  const docsMatch = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (docsMatch) {
+    return `https://docs.google.com/document/d/${docsMatch[1]}/export?format=txt`;
+  }
+
+  // Google Slides - convert to export URL
+  const slidesMatch = url.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9_-]+)/);
+  if (slidesMatch) {
+    return `https://docs.google.com/presentation/d/${slidesMatch[1]}/export?format=txt`;
+  }
+
+  // Google Drive file - convert to direct download
+  const driveMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (driveMatch) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+  }
+
+  // Fathom - check if it's a share link
+  if (url.includes("fathom.video")) {
+    // Fathom doesn't allow direct fetching - return special marker
+    return `FATHOM:${url}`;
+  }
+
+  return url;
+}
+
 async function fetchLinkContent(url: string): Promise<string> {
-  const response = await fetch(url, {
+  const fetchUrl = convertToFetchableUrl(url);
+
+  // Special handling for Fathom links
+  if (fetchUrl.startsWith("FATHOM:")) {
+    return `[Fathom recording link provided: ${url}. Note: Fathom links require manual transcript export. Please go to your Fathom recording, click "Copy Transcript" and paste it directly instead.]`;
+  }
+
+  const response = await fetch(fetchUrl, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; MarketingStrategyBot/1.0)",
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     },
+    redirect: "follow",
   });
 
   if (!response.ok) {
+    // Provide helpful error messages
+    if (url.includes("google.com")) {
+      throw new Error(`Google link not accessible. Make sure sharing is set to "Anyone with the link can view"`);
+    }
     throw new Error(`Failed to fetch: ${response.status}`);
   }
 
-  const html = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+
+  // If it's plain text (like Google Docs export), return as-is
+  if (contentType.includes("text/plain")) {
+    return text.slice(0, 20000);
+  }
 
   // Extract text content - strip HTML tags
-  const textContent = html
+  const textContent = text
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 15000); // Limit content
+    .slice(0, 20000);
 
   return textContent;
 }

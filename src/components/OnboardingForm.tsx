@@ -15,6 +15,7 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [socialProfile, setSocialProfile] = useState("");
   const [transcriptLink, setTranscriptLink] = useState("");
+  const [pastedTranscript, setPastedTranscript] = useState("");
   const [auditLink, setAuditLink] = useState("");
   const [auditDeck, setAuditDeck] = useState<File | null>(null);
 
@@ -23,7 +24,10 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
 
     let meetingRecording: OnboardingData["meetingRecording"] = null;
 
-    if (transcriptLink.trim()) {
+    // Prioritize pasted transcript over link
+    if (pastedTranscript.trim()) {
+      meetingRecording = { type: "transcript", content: pastedTranscript };
+    } else if (transcriptLink.trim()) {
       meetingRecording = { type: "link", content: transcriptLink };
     }
 
@@ -90,11 +94,23 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
               value={transcriptLink}
               onChange={(e) => setTranscriptLink(e.target.value)}
               className="w-full px-4 py-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              placeholder="https://docs.google.com/... or https://zoom.us/rec/..."
+              placeholder="https://docs.google.com/document/d/..."
             />
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Link to Zoom recording, Google Doc transcript, Notion page, etc.
+              Google Doc link (set sharing to &quot;Anyone with link can view&quot;). For Fathom, copy the transcript and paste below.
             </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              Or Paste Transcript Directly
+            </label>
+            <textarea
+              value={pastedTranscript}
+              onChange={(e) => setPastedTranscript(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition min-h-[120px]"
+              placeholder="Paste your Fathom transcript or meeting notes here..."
+            />
           </div>
 
           <div>
@@ -106,10 +122,10 @@ export default function OnboardingForm({ onSubmit, isLoading }: OnboardingFormPr
               value={auditLink}
               onChange={(e) => setAuditLink(e.target.value)}
               className="w-full px-4 py-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              placeholder="https://docs.google.com/presentation/... or https://pitch.com/..."
+              placeholder="https://docs.google.com/presentation/d/..."
             />
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Link to Google Slides, Pitch, Canva, or other presentation
+              Google Slides or Docs link (set sharing to &quot;Anyone with link can view&quot;)
             </p>
           </div>
 
