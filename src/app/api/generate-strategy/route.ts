@@ -179,14 +179,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ strategy });
   } catch (error) {
     console.error("Error generating strategy:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to generate strategy" },
+      { error: `Failed to generate strategy: ${errorMessage}` },
       { status: 500 }
     );
   }
 }
 
 async function generateStrategy(data: CollectedData) {
+  // Truncate content to avoid token limits
+  const truncate = (text: string | null, maxLen: number) => {
+    if (!text) return null;
+    return text.length > maxLen ? text.slice(0, maxLen) + "... [truncated]" : text;
+  };
+
+  const meetingTranscript = truncate(data.meetingTranscript, 15000);
+  const auditDeckContent = truncate(data.auditDeckContent, 15000);
+  const websiteContent = truncate(data.websiteContent, 8000);
+
+  console.log("Content lengths - Transcript:", meetingTranscript?.length || 0,
+              "Audit:", auditDeckContent?.length || 0,
+              "Website:", websiteContent?.length || 0);
+
   const prompt = `You are a senior marketing strategist. Based on the following client information, create a comprehensive marketing strategy.
 
 ## Client Information
@@ -194,13 +209,13 @@ async function generateStrategy(data: CollectedData) {
 - **Industry:** ${data.industry}
 
 ## Meeting Notes/Transcript
-${data.meetingTranscript || "No meeting transcript provided"}
+${meetingTranscript || "No meeting transcript provided"}
 
 ## Audit Deck Content
-${data.auditDeckContent || "No audit deck provided"}
+${auditDeckContent || "No audit deck provided"}
 
 ## Website Content
-${data.websiteContent || "No website content available"}
+${websiteContent || "No website content available"}
 
 ## Social Media Presence
 ${data.socialContent || "No social profile information available"}
@@ -256,7 +271,7 @@ Make the strategy specific, actionable, and tailored to the client's industry an
     const strategy = JSON.parse(textContent.text);
     return strategy;
   } catch {
-    console.error("Failed to parse strategy JSON:", textContent.text);
-    throw new Error("Invalid strategy format from AI");
+    console.error("Failed to parse strategy JSON. Response was:", textContent.text.slice(0, 500));
+    throw new Error(`Invalid strategy format from AI. Response started with: ${textContent.text.slice(0, 100)}`);
   }
 }
