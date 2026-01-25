@@ -1,13 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
 // Lazy initialization to avoid build-time errors
 let anthropic: Anthropic | null = null;
 
+/**
+ * Attempts to read the API key from CLI credential files.
+ * The Claude CLI stores credentials in ~/.anthropic/credentials.json
+ * or ~/.config/anthropic/credentials.json
+ */
+function getCliApiKey(): string | null {
+  const homeDir = os.homedir();
+  const credentialPaths = [
+    path.join(homeDir, ".anthropic", "credentials.json"),
+    path.join(homeDir, ".config", "anthropic", "credentials.json"),
+    path.join(homeDir, ".anthropic", "auth.json"),
+    path.join(homeDir, ".config", "anthropic", "auth.json"),
+  ];
+
+  for (const credPath of credentialPaths) {
+    try {
+      if (fs.existsSync(credPath)) {
+        const content = fs.readFileSync(credPath, "utf-8");
+        const credentials = JSON.parse(content);
+        // Check common credential field names
+        const apiKey = credentials.api_key || credentials.apiKey || credentials.anthropic_api_key || credentials.key;
+        if (apiKey) {
+          console.log(`Loaded API key from CLI credentials: ${credPath}`);
+          return apiKey;
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to read credentials from ${credPath}:`, error);
+    }
+  }
+
+  return null;
+}
+
 function getAnthropic() {
   if (!anthropic) {
+    // Priority: 1. Environment variable, 2. CLI credentials file
+    let apiKey = process.env.ANTHROPIC_API_KEY;
+
+    if (!apiKey) {
+      apiKey = getCliApiKey() || undefined;
+    }
+
+    if (!apiKey) {
+      throw new Error(
+        "Anthropic API key not found. Please set ANTHROPIC_API_KEY environment variable " +
+        "or authenticate via the Claude CLI (run 'claude login' or 'anthropic auth login')."
+      );
+    }
+
     anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+      apiKey,
     });
   }
   return anthropic;
@@ -180,6 +231,26 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Error generating strategy:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    // Check for authentication-related errors
+    const isAuthError =
+      errorMessage.includes("API key") ||
+      errorMessage.includes("authentication") ||
+      errorMessage.includes("401") ||
+      errorMessage.includes("Unauthorized") ||
+      errorMessage.includes("invalid_api_key");
+
+    if (isAuthError) {
+      return NextResponse.json(
+        {
+          error: "Authentication failed. Please check your Anthropic API key configuration.",
+          details: errorMessage,
+          help: "Set ANTHROPIC_API_KEY environment variable or run 'claude login' to authenticate via CLI."
+        },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
       { error: `Failed to generate strategy: ${errorMessage}` },
       { status: 500 }
