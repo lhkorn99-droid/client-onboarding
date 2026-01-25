@@ -9,12 +9,16 @@ let anthropic: Anthropic | null = null;
 
 /**
  * Attempts to read the API key from CLI credential files.
- * The Claude CLI stores credentials in ~/.anthropic/credentials.json
- * or ~/.config/anthropic/credentials.json
+ * Supports both Claude Code (~/.claude/) and Anthropic CLI (~/.anthropic/) credential locations.
  */
 function getCliApiKey(): string | null {
   const homeDir = os.homedir();
   const credentialPaths = [
+    // Claude Code (clawdbot) credential locations
+    path.join(homeDir, ".claude", "credentials.json"),
+    path.join(homeDir, ".claude", "config.json"),
+    path.join(homeDir, ".claude", "auth.json"),
+    // Anthropic CLI credential locations
     path.join(homeDir, ".anthropic", "credentials.json"),
     path.join(homeDir, ".config", "anthropic", "credentials.json"),
     path.join(homeDir, ".anthropic", "auth.json"),
@@ -26,8 +30,14 @@ function getCliApiKey(): string | null {
       if (fs.existsSync(credPath)) {
         const content = fs.readFileSync(credPath, "utf-8");
         const credentials = JSON.parse(content);
-        // Check common credential field names
-        const apiKey = credentials.api_key || credentials.apiKey || credentials.anthropic_api_key || credentials.key;
+        // Check common credential field names used by various CLI tools
+        const apiKey =
+          credentials.api_key ||
+          credentials.apiKey ||
+          credentials.anthropic_api_key ||
+          credentials.key ||
+          credentials.claudeApiKey ||
+          credentials.token;
         if (apiKey) {
           console.log(`Loaded API key from CLI credentials: ${credPath}`);
           return apiKey;
